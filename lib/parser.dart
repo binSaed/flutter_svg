@@ -1,3 +1,4 @@
+import 'package:xml/xml.dart';
 import 'package:xml/xml_events.dart' as xml show parseEvents;
 
 import 'src/svg/parser_state.dart';
@@ -22,8 +23,56 @@ class SvgParser {
     String? key,
     bool warningsAsErrors = false,
   }) async {
+    final String fixedSvg = await _fixDefsOrder(str);
     final SvgParserState state =
-        SvgParserState(xml.parseEvents(str), theme, key, warningsAsErrors);
+        SvgParserState(xml.parseEvents(fixedSvg), theme, key, warningsAsErrors);
     return await state.parse();
+  }
+
+  Future<String> _fixDefsOrder(String rawXml) async {
+    //issue: https://github.com/dnfield/flutter_svg/issues/102
+    //source: https://github.com/Tokenyet/flutter_svg_opt
+
+    final XmlDocument doc = XmlDocument.parse(rawXml);
+    final XmlElement? svgDoc = doc.firstElementChild;
+
+    if (svgDoc == null) {
+      return rawXml;
+    }
+
+    XmlElement? defsElement;
+    final List<XmlElement> notDefsElements = <XmlElement>[];
+
+    for (final XmlElement element in svgDoc.childElements) {
+      if (element.name.qualified.toLowerCase() == 'defs') {
+        defsElement = element;
+      } else {
+        notDefsElements.add(element);
+      }
+    }
+    if (defsElement == null) {
+      return rawXml;
+    }
+
+    final XmlBuilder builder = XmlBuilder();
+    builder.element(
+      'svg',
+      attributes: Map<String, String>.fromEntries(
+        svgDoc.attributes.map(
+          (XmlAttribute e) =>
+              MapEntry<String, String>(e.name.qualified, e.value),
+        ),
+      ),
+      nest: () {
+        builder.xml(defsElement!.outerXml);
+        for (final XmlElement sibling in notDefsElements) {
+          builder.xml(sibling.outerXml);
+        }
+      },
+    );
+
+    final String output = builder.buildDocument().toXmlString();
+
+    return output;
   }
 }
